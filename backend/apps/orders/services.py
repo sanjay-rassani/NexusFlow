@@ -368,14 +368,95 @@ class OrderService:
             raise NotFound("Order not found.")
 
     # ──────────────────────────────────────────
-    # WebSocket event hook (Phase 5 fills this in)
+    # WebSocket event emission
     # ──────────────────────────────────────────
 
     @staticmethod
     def _emit_event(event_type: str, order: Order) -> None:
         """
-        Placeholder for real-time event emission.
-        Phase 5 will replace this with:
-            async_to_sync(channel_layer.group_send)(...)
+        Broadcasts real-time events to all parties subscribed to an order.
+
+        Event routing:
+          NEW_ORDER            → vendor's personal notification channel
+                                  (so they see it even before opening the order WS)
+          ORDER_STATUS_UPDATED → order channel group (customer, vendor, rider)
+          RIDER_ASSIGNED       → order channel group + customer notification channel
+
+        All sends are deferred via transaction.on_commit so phantom events
+        are never emitted if the DB transaction rolls back.
         """
-        logger.debug("Event [%s] for order %s — WebSocket not yet wired.", event_type, order.id)
+        from core.channel_utils import broadcast, broadcast_to_order, broadcast_to_user
+
+        order_payload = {
+            "type": "ORDER_STATUS_UPDATED",
+            "order_id": str(order.id),
+            "status": order.status,
+            "updated_at": order.updated_at.isoformat(),
+        }
+
+        if event_type == "NEW_ORDER":
+            # Push to vendor's notification channel so they receive it immediately
+            broadcast_to_user(
+                order.vendor.owner_id,
+                {
+                    "type": "notification.push",
+                    "data": {
+                        "type": "NEW_ORDER",
+                        "order_id": str(order.id),
+                        "customer_name": order.customer.full_name or order.customer.email,
+                        "total": str(order.total),
+                        "vendor_name": order.vendor.name,
+                    },
+                },
+            )
+            # Also broadcast to the order channel (vendor may already be watching)
+            broadcast_to_order(order.id, {
+                "type": "order.status.updated",
+                "data": order_payload,
+            })
+
+        elif event_type == "ORDER_STATUS_UPDATED":
+            broadcast_to_order(order.id, {
+                "type": "order.status.updated",
+                "data": order_payload,
+            })
+            # Push to customer's notification channel as well
+            broadcast_to_user(
+                order.customer_id,
+                {
+                    "type": "notification.push",
+                    "data": {
+                        "type": "ORDER_STATUS_UPDATED",
+                        "order_id": str(order.id),
+                        "status": order.status,
+                    },
+                },
+            )
+
+        elif event_type == "RIDER_ASSIGNED":
+            rider_data = {
+                "type": "RIDER_ASSIGNED",
+                "order_id": str(order.id),
+                "rider_id": str(order.rider_id) if order.rider_id else None,
+                "rider_email": order.rider.email if order.rider else None,
+            }
+            broadcast_to_order(order.id, {
+                "type": "rider.assigned",
+                "data": rider_data,
+            })
+            broadcast_to_user(
+                order.customer_id,
+                {
+                    "type": "notification.push",
+                    "data": rider_data,
+                },
+            )
+
+        else:
+            # Generic fallback — broadcast to order channel only
+            broadcast_to_order(order.id, {
+                "type": "order.status.updated",
+                "data": order_payload,
+            })
+
+        logger.debug("Event [%s] emitted for order %s.", event_type, order.id)
