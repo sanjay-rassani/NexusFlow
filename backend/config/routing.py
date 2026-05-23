@@ -1,16 +1,35 @@
 """
-WebSocket URL routing.
-Each app contributes its own WebSocket URL patterns here.
-Populated in Phase 5 (WebSocket integration).
+WebSocket URL routing — all consumers registered here.
+
+Pattern → Consumer mapping:
+  ws/orders/{order_id}/          → OrderStatusConsumer
+  ws/rider/{rider_id}/location/  → RiderLocationConsumer
+  ws/notifications/              → NotificationConsumer
+
+Auth: All connections go through JWTAuthMiddlewareStack (configured in asgi.py).
+      Consumers close the connection (code 4001) if the user is not authenticated.
+
+UUID note: order_id uses the full UUID string pattern; rider_id is UUID too
+since User.pk is a UUID field.
 """
 
 from django.urls import path
 
-# Placeholder — consumers will be registered here in Phase 5
+from apps.delivery.consumers import RiderLocationConsumer
+from apps.notifications.consumers import NotificationConsumer
+from apps.orders.consumers import OrderStatusConsumer
+
 websocket_urlpatterns = [
-    # Example (added in Phase 5):
-    # path("ws/orders/<int:order_id>/", consumers.OrderConsumer.as_asgi()),
-    # path("ws/notifications/", consumers.NotificationConsumer.as_asgi()),
-    # path("ws/chat/<str:room_name>/", consumers.ChatConsumer.as_asgi()),
-    # path("ws/rider/<int:rider_id>/location/", consumers.RiderLocationConsumer.as_asgi()),
+    # Order status tracking
+    # Client: ws://host/ws/orders/<uuid>/?token=<jwt>
+    path("ws/orders/<uuid:order_id>/", OrderStatusConsumer.as_asgi()),
+
+    # Rider live location
+    # Rider sends:    ws://host/ws/rider/<uuid>>/location/?token=<jwt>
+    # Customer views: same URL (receives broadcasts)
+    path("ws/rider/<uuid:rider_id>/location/", RiderLocationConsumer.as_asgi()),
+
+    # Per-user notification stream
+    # Client: ws://host/ws/notifications/?token=<jwt>
+    path("ws/notifications/", NotificationConsumer.as_asgi()),
 ]
