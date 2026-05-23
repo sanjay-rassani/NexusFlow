@@ -122,9 +122,9 @@ celery -A config worker --loglevel=info
 ## Development Phases
 
 - [x] **Phase 1** — Project Foundation (current)
-- [ ] **Phase 2** — Authentication (JWT, RBAC, email verification)
-- [ ] **Phase 3** — Vendor & Product Management
-- [ ] **Phase 4** — Order Management System
+- [x] **Phase 2** — Authentication (JWT, RBAC, email verification)
+- [x] **Phase 3** — Vendor & Product Management
+- [x] **Phase 4** — Order Management System
 - [ ] **Phase 5** — WebSocket Integration (Django Channels)
 - [ ] **Phase 6** — Redis Caching Layer
 - [ ] **Phase 7** — Celery Background Jobs
