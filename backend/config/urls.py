@@ -11,8 +11,11 @@ from django.urls import include, path
 api_v1_patterns = [
     # Auth endpoints (Phase 2)
     path("auth/", include("apps.users.urls")),
-    # Domain endpoints (Phase 3+)
+    # Vendor + product endpoints (Phase 3)
     path("vendors/", include("apps.vendors.urls")),
+    # Standalone product detail — GET /api/v1/products/{id}/
+    path("products/", include("apps.vendors.product_urls")),
+    # Domain endpoints (Phase 4+)
     path("orders/", include("apps.orders.urls")),
     path("delivery/", include("apps.delivery.urls")),
     path("chat/", include("apps.chat.urls")),
