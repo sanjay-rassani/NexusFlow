@@ -24,9 +24,16 @@ class UserRole(models.TextChoices):
 class User(AbstractUser):
     """
     Extended user model with roles and profile fields.
+    email is the login credential; username is unused but kept as a nullable,
+    non-unique field to remain compatible with third-party packages that
+    reference AbstractUser.username.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # Override AbstractUser.username — we don't use it, but some third-party packages
+    # (e.g. DRF, rest_framework_simplejwt) may reference it. Remove the unique constraint
+    # to prevent IntegrityError when multiple users are created without an explicit username.
+    username = models.CharField(max_length=150, blank=True, default="")
     email = models.EmailField(unique=True)
     role = models.CharField(
         max_length=20,

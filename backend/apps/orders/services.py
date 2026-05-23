@@ -317,6 +317,16 @@ class OrderService:
             admin.email,
         )
 
+        # Add rider to the order's chat room so they can communicate
+        # with the customer and vendor. Room is created lazily if absent.
+        try:
+            from apps.chat.services import ChatService
+            room = ChatService.get_or_create_room(order)
+            ChatService.add_participant(room, rider)
+        except Exception as exc:
+            # Chat room failure must never break order assignment
+            logger.warning("Failed to add rider to chat room for order %s: %s", order.id, exc)
+
         OrderService._emit_event("RIDER_ASSIGNED", order)
 
         return order

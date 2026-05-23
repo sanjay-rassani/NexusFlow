@@ -15,6 +15,7 @@ since User.pk is a UUID field.
 
 from django.urls import path
 
+from apps.chat.consumers import ChatConsumer
 from apps.delivery.consumers import RiderLocationConsumer
 from apps.notifications.consumers import NotificationConsumer
 from apps.orders.consumers import OrderStatusConsumer
@@ -25,11 +26,16 @@ websocket_urlpatterns = [
     path("ws/orders/<uuid:order_id>/", OrderStatusConsumer.as_asgi()),
 
     # Rider live location
-    # Rider sends:    ws://host/ws/rider/<uuid>>/location/?token=<jwt>
+    # Rider sends:    ws://host/ws/rider/<uuid>/location/?token=<jwt>
     # Customer views: same URL (receives broadcasts)
     path("ws/rider/<uuid:rider_id>/location/", RiderLocationConsumer.as_asgi()),
 
     # Per-user notification stream
     # Client: ws://host/ws/notifications/?token=<jwt>
     path("ws/notifications/", NotificationConsumer.as_asgi()),
+
+    # Chat room — real-time messaging
+    # Client: ws://host/ws/chat/<room_uuid>/?token=<jwt>
+    # Only participants (customer, vendor owner, rider) may connect.
+    path("ws/chat/<uuid:room_id>/", ChatConsumer.as_asgi()),
 ]
