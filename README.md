@@ -125,8 +125,8 @@ celery -A config worker --loglevel=info
 - [x] **Phase 2** — Authentication (JWT, RBAC, email verification)
 - [x] **Phase 3** — Vendor & Product Management
 - [x] **Phase 4** — Order Management System
-- [ ] **Phase 5** — WebSocket Integration (Django Channels)
-- [ ] **Phase 6** — Redis Caching Layer
+- [x] **Phase 5** — WebSocket Integration (Django Channels)
+- [x] **Phase 6** — Redis Caching Layer
 - [ ] **Phase 7** — Celery Background Jobs
 - [ ] **Phase 8** — Chat System
 - [ ] **Phase 9** — Notification System

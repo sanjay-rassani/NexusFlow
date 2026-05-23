@@ -11,6 +11,8 @@ import logging
 from django.db import transaction
 from rest_framework import serializers as drf_serializers
 
+from core.cache import invalidate_product_cache, invalidate_vendor_cache
+
 from .models import Product, ProductCategory, Vendor
 
 logger = logging.getLogger(__name__)
@@ -38,6 +40,7 @@ class VendorService:
 
         vendor = Vendor.objects.create(owner=user, **validated_data)
         logger.info("Vendor onboarded: %s (owner=%s)", vendor.name, user.email)
+        invalidate_vendor_cache()           # new vendor — invalidate list pages
         return vendor
 
     @staticmethod
@@ -46,6 +49,7 @@ class VendorService:
             setattr(vendor, field, value)
         vendor.save()
         logger.info("Vendor updated: %s", vendor.name)
+        invalidate_vendor_cache(vendor.pk)
         return vendor
 
     @staticmethod
@@ -55,6 +59,7 @@ class VendorService:
         vendor.save(update_fields=["is_open", "updated_at"])
         state = "opened" if vendor.is_open else "closed"
         logger.info("Vendor %s %s.", vendor.name, state)
+        invalidate_vendor_cache(vendor.pk)  # is_open appears in list view
         return vendor
 
     @staticmethod
@@ -65,6 +70,7 @@ class VendorService:
         logger.info(
             "Vendor %s set to active=%s by admin.", vendor.name, is_active
         )
+        invalidate_vendor_cache(vendor.pk)
         return vendor
 
     @staticmethod
@@ -87,6 +93,7 @@ class ProductService:
     def create(vendor: Vendor, validated_data: dict) -> Product:
         product = Product.objects.create(vendor=vendor, **validated_data)
         logger.info("Product created: %s (vendor=%s)", product.name, vendor.name)
+        invalidate_product_cache(vendor.pk, product.pk)
         return product
 
     @staticmethod
@@ -95,6 +102,7 @@ class ProductService:
             setattr(product, field, value)
         product.save()
         logger.info("Product updated: %s", product.name)
+        invalidate_product_cache(product.vendor_id, product.pk)
         return product
 
     @staticmethod
@@ -106,6 +114,7 @@ class ProductService:
         product.is_available = False
         product.save(update_fields=["is_available", "updated_at"])
         logger.info("Product soft-deleted: %s", product.name)
+        invalidate_product_cache(product.vendor_id, product.pk)
 
     @staticmethod
     @transaction.atomic

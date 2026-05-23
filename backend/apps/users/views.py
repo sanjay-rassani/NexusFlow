@@ -12,6 +12,8 @@ from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 
+from core.rate_limit import rate_limit
+
 from .serializers import (
     ChangePasswordSerializer,
     CustomTokenObtainPairSerializer,
@@ -31,11 +33,13 @@ class RegisterView(generics.CreateAPIView):
     """
     POST /api/v1/auth/register/
     Open endpoint. Sends verification email on success.
+    Rate-limited: 5 registrations per IP per minute.
     """
 
     serializer_class = UserRegistrationSerializer
     permission_classes = [permissions.AllowAny]
 
+    @rate_limit(prefix="register", max_requests=5, window_seconds=60)
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -53,10 +57,15 @@ class LoginView(TokenObtainPairView):
     """
     POST /api/v1/auth/login/
     Returns access + refresh JWT with role and full_name in payload.
+    Rate-limited: 10 attempts per IP per minute to mitigate brute-force.
     """
 
     serializer_class = CustomTokenObtainPairSerializer
     permission_classes = [permissions.AllowAny]
+
+    @rate_limit(prefix="login", max_requests=10, window_seconds=60)
+    def post(self, request, *args, **kwargs):
+        return super().post(request, *args, **kwargs)
 
 
 class LogoutView(APIView):

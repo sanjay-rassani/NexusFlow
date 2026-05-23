@@ -10,6 +10,12 @@ from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.cache import (
+    CacheKeys,
+    TTL_PRODUCT_LIST,
+    TTL_VENDOR_DETAIL,
+    TTL_VENDOR_LIST,
+)
 from core.mixins import SerializerActionMixin
 from core.permissions import IsAdminUser, IsVendor
 
@@ -37,7 +43,7 @@ class PublicVendorListView(generics.ListAPIView):
     """
     GET /api/v1/vendors/
     Lists all active vendors. Filterable by name, is_open.
-    Accessible to all (including unauthenticated users).
+    Cached per unique query-param combination for TTL_VENDOR_LIST seconds.
     """
 
     serializer_class = VendorListSerializer
@@ -50,12 +56,24 @@ class PublicVendorListView(generics.ListAPIView):
     def get_queryset(self):
         return Vendor.objects.filter(is_active=True).order_by("name")
 
+    def list(self, request, *args, **kwargs):
+        from django.core.cache import cache
+
+        cache_key = CacheKeys.vendor_list(request.query_params)
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            return Response(cached_data)
+
+        response = super().list(request, *args, **kwargs)
+        cache.set(cache_key, response.data, timeout=TTL_VENDOR_LIST)
+        return response
+
 
 class PublicVendorDetailView(generics.RetrieveAPIView):
     """
     GET /api/v1/vendors/{id}/
     Full vendor detail including categories.
-    Avoids N+1 with prefetch_related on categories.
+    Cached per vendor_id for TTL_VENDOR_DETAIL seconds.
     """
 
     serializer_class = VendorDetailSerializer
@@ -66,12 +84,24 @@ class PublicVendorDetailView(generics.RetrieveAPIView):
             "categories", "categories__products"
         )
 
+    def retrieve(self, request, *args, **kwargs):
+        from django.core.cache import cache
+
+        cache_key = CacheKeys.vendor_detail(kwargs["pk"])
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            return Response(cached_data)
+
+        response = super().retrieve(request, *args, **kwargs)
+        cache.set(cache_key, response.data, timeout=TTL_VENDOR_DETAIL)
+        return response
+
 
 class PublicVendorProductListView(generics.ListAPIView):
     """
     GET /api/v1/vendors/{vendor_id}/products/
     Lists all available products for a vendor.
-    Filterable by category, price range, name search.
+    Cached per (vendor_id, query params) for TTL_PRODUCT_LIST seconds.
     """
 
     serializer_class = ProductListSerializer
@@ -91,6 +121,20 @@ class PublicVendorProductListView(generics.ListAPIView):
             .select_related("category")
             .order_by("category__order", "name")
         )
+
+    def list(self, request, *args, **kwargs):
+        from django.core.cache import cache
+
+        cache_key = CacheKeys.vendor_products(
+            kwargs["vendor_id"], request.query_params
+        )
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            return Response(cached_data)
+
+        response = super().list(request, *args, **kwargs)
+        cache.set(cache_key, response.data, timeout=TTL_PRODUCT_LIST)
+        return response
 
 
 class PublicProductDetailView(generics.RetrieveAPIView):
