@@ -103,9 +103,11 @@ class ChatService:
     def send_message(room: ChatRoom, sender, content: str) -> Message:
         """
         Persist a message and broadcast it to the chat room WebSocket group.
-        Broadcast is deferred via on_commit so it only fires if the DB write succeeds.
+        Also creates a CHAT_MESSAGE notification for each participant who is
+        not the sender (so they see it in their notification list if offline).
 
-        Returns the saved Message instance.
+        All broadcasts are deferred via on_commit.
+        Notification creation failure never breaks message delivery.
         """
         if not room.participants.filter(pk=sender.pk).exists():
             raise drf_serializers.ValidationError(
@@ -117,8 +119,7 @@ class ChatService:
             "Message saved: room=%s sender=%s length=%d", room.id, sender.email, len(content)
         )
 
-        # Build the WebSocket payload now (inside the transaction) so serialization
-        # errors surface before on_commit.
+        # ── Chat room WebSocket broadcast ────────────────────────────────────
         payload = {
             "type": "chat.message",
             "data": {
@@ -136,6 +137,33 @@ class ChatService:
             },
         }
         broadcast_to_chat_room(room.id, payload, use_on_commit=True)
+
+        # ── Persist CHAT_MESSAGE notifications for non-sender participants ───
+        try:
+            from apps.notifications.models import NotificationType
+            from apps.notifications.services import NotificationService
+
+            recipients = room.participants.exclude(pk=sender.pk)
+            preview = content[:80] + ("…" if len(content) > 80 else "")
+            sender_name = sender.get_full_name() or sender.email
+
+            for recipient in recipients:
+                NotificationService.create(
+                    recipient=recipient,
+                    notification_type=NotificationType.CHAT_MESSAGE,
+                    title=f"New message from {sender_name}",
+                    message=preview,
+                    data={
+                        "room_id": str(room.id),
+                        "order_id": str(room.order_id),
+                        "sender_id": str(sender.pk),
+                        "sender_email": sender.email,
+                        "message_id": str(msg.id),
+                    },
+                )
+        except Exception as exc:
+            logger.error("Failed to create CHAT_MESSAGE notifications for room %s: %s", room.id, exc)
+
         return msg
 
     @staticmethod
