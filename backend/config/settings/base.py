@@ -181,6 +181,29 @@ CELERY_TIMEZONE = "UTC"
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutes hard limit
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+# Explicitly import task modules so Celery registers them regardless of autodiscovery timing.
+CELERY_IMPORTS = (
+    "apps.users.tasks",
+    "apps.notifications.tasks",
+    "apps.orders.tasks",
+)
+
+# Periodic task schedule — loaded into django-celery-beat's DB scheduler on startup.
+# Run `python manage.py migrate` to ensure the celery_beat tables exist.
+from celery.schedules import crontab  # noqa: E402
+
+CELERY_BEAT_SCHEDULE = {
+    # Auto-cancel orders stuck in CREATED state for more than ORDER_EXPIRY_MINUTES.
+    # Runs every 5 minutes to catch expired orders promptly.
+    "auto-cancel-expired-orders": {
+        "task": "orders.auto_cancel_expired_orders",
+        "schedule": crontab(minute="*/5"),
+        "options": {"expires": 240},  # Drop if not started within 4 min
+    },
+}
+
+# Configurable order expiry window (minutes). Override in .env or per-environment settings.
+ORDER_EXPIRY_MINUTES = env.int("ORDER_EXPIRY_MINUTES", default=30)
 
 
 # ──────────────────────────────────────────────

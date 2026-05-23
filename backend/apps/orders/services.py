@@ -414,7 +414,7 @@ class OrderService:
         }
 
         if event_type == "NEW_ORDER":
-            # ── Persist notification ─────────────────────────────────────────
+            # ── Persist DB notification ──────────────────────────────────────
             try:
                 NotificationService.create(
                     recipient=order.vendor.owner,
@@ -428,6 +428,12 @@ class OrderService:
                 )
             except Exception as exc:
                 logger.error("Failed to persist NEW_ORDER notification for order %s: %s", order.id, exc)
+
+            # ── Async email ──────────────────────────────────────────────────
+            _order_id = str(order.id)
+            transaction.on_commit(
+                lambda: _dispatch_email("notifications.send_new_order_email", order_id=_order_id)
+            )
 
             # ── Real-time WS events ──────────────────────────────────────────
             broadcast_to_user(
@@ -449,7 +455,7 @@ class OrderService:
             })
 
         elif event_type == "ORDER_STATUS_UPDATED":
-            # ── Persist notification ─────────────────────────────────────────
+            # ── Persist DB notifications ─────────────────────────────────────
             try:
                 NotificationService.create(
                     recipient=order.customer,
@@ -468,6 +474,26 @@ class OrderService:
                     )
             except Exception as exc:
                 logger.error("Failed to persist ORDER_STATUS notification for order %s: %s", order.id, exc)
+
+            # ── Async emails ─────────────────────────────────────────────────
+            _order_id = str(order.id)
+            _customer_id = str(order.customer_id)
+            transaction.on_commit(
+                lambda: _dispatch_email(
+                    "notifications.send_order_status_email",
+                    order_id=_order_id,
+                    recipient_id=_customer_id,
+                )
+            )
+            if order.rider_id:
+                _rider_id = str(order.rider_id)
+                transaction.on_commit(
+                    lambda: _dispatch_email(
+                        "notifications.send_order_status_email",
+                        order_id=_order_id,
+                        recipient_id=_rider_id,
+                    )
+                )
 
             # ── Real-time WS events ──────────────────────────────────────────
             broadcast_to_order(order.id, {
@@ -494,7 +520,7 @@ class OrderService:
                 "rider_email": order.rider.email if order.rider else None,
             }
 
-            # ── Persist notifications ────────────────────────────────────────
+            # ── Persist DB notifications ─────────────────────────────────────
             try:
                 NotificationService.create(
                     recipient=order.customer,
@@ -517,6 +543,12 @@ class OrderService:
             except Exception as exc:
                 logger.error("Failed to persist RIDER_ASSIGNED notification for order %s: %s", order.id, exc)
 
+            # ── Async email ──────────────────────────────────────────────────
+            _order_id = str(order.id)
+            transaction.on_commit(
+                lambda: _dispatch_email("notifications.send_rider_assigned_email", order_id=_order_id)
+            )
+
             # ── Real-time WS events ──────────────────────────────────────────
             broadcast_to_order(order.id, {
                 "type": "rider.assigned",
@@ -538,3 +570,17 @@ class OrderService:
             })
 
         logger.debug("Event [%s] emitted for order %s.", event_type, order.id)
+
+
+def _dispatch_email(task_name: str, **kwargs) -> None:
+    """
+    Helper that sends a Celery task by name.
+    Failures are caught and logged — email dispatch must never propagate to callers.
+    Using send_task() by name avoids circular imports between services and tasks.
+    """
+    try:
+        from config.celery import app as celery_app
+        celery_app.send_task(task_name, kwargs=kwargs)
+        logger.debug("Email task dispatched: %s %s", task_name, kwargs)
+    except Exception as exc:
+        logger.error("Failed to dispatch email task %s: %s", task_name, exc)

@@ -20,6 +20,20 @@ from rest_framework import serializers as drf_serializers
 
 from core.channel_utils import broadcast_to_chat_room
 
+
+def _dispatch_chat_email(message_id: str, recipient_id: str) -> None:
+    """Fire-and-forget: send a chat notification email via Celery."""
+    try:
+        from config.celery import app as celery_app
+        celery_app.send_task(
+            "notifications.send_chat_notification_email",
+            kwargs={"message_id": message_id, "recipient_id": recipient_id},
+        )
+    except Exception as exc:
+        logging.getLogger(__name__).error(
+            "Failed to dispatch chat email task (message=%s): %s", message_id, exc
+        )
+
 from .models import ChatRoom, Message
 
 logger = logging.getLogger(__name__)
@@ -143,7 +157,7 @@ class ChatService:
             from apps.notifications.models import NotificationType
             from apps.notifications.services import NotificationService
 
-            recipients = room.participants.exclude(pk=sender.pk)
+            recipients = list(room.participants.exclude(pk=sender.pk))
             preview = content[:80] + ("…" if len(content) > 80 else "")
             sender_name = sender.get_full_name() or sender.email
 
@@ -163,6 +177,19 @@ class ChatService:
                 )
         except Exception as exc:
             logger.error("Failed to create CHAT_MESSAGE notifications for room %s: %s", room.id, exc)
+
+        # ── Async email for each non-sender participant ───────────────────────
+        # Dispatched via on_commit — email only sends if the DB transaction commits.
+        # Using recipient IDs captured before the loop to avoid late-binding closures.
+        try:
+            _msg_id = str(msg.id)
+            for recipient in room.participants.exclude(pk=sender.pk):
+                _recipient_id = str(recipient.pk)
+                transaction.on_commit(
+                    lambda mid=_msg_id, rid=_recipient_id: _dispatch_chat_email(mid, rid)
+                )
+        except Exception as exc:
+            logger.error("Failed to schedule chat email tasks for room %s: %s", room.id, exc)
 
         return msg
 

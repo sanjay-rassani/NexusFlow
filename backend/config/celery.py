@@ -14,8 +14,15 @@ app = Celery("nexusflow")
 # Pull config from Django settings, namespace CELERY_ prefix
 app.config_from_object("django.conf:settings", namespace="CELERY")
 
-# Auto-discover tasks in all installed apps
-app.autodiscover_tasks()
+# Auto-discover tasks — pass the packages explicitly so the worker finds all
+# tasks at startup without relying on lazy Django-settings resolution.
+app.autodiscover_tasks(
+    [
+        "apps.users",
+        "apps.notifications",
+        "apps.orders",
+    ]
+)
 
 
 @app.task(bind=True, ignore_result=True)
