@@ -18,9 +18,16 @@ class UserService:
     @staticmethod
     def register_user(validated_data: dict) -> User:
         """Create and return a new user, then dispatch verification email."""
+        email = validated_data["email"]
+        # username is not used for login (email is the USERNAME_FIELD) but
+        # AbstractUser still requires the field. Use the email prefix as a
+        # non-unique identifier — the uniqueness constraint was dropped in
+        # migration 0002_remove_username_unique_constraint.
+        username = email.split("@")[0]
+
         user = User.objects.create_user(
-            email=validated_data["email"],
-            username=validated_data["username"],
+            email=email,
+            username=username,
             first_name=validated_data.get("first_name", ""),
             last_name=validated_data.get("last_name", ""),
             phone_number=validated_data.get("phone_number"),

@@ -34,4 +34,4 @@ SIMPLE_JWT = {  # noqa: F405
 # ──────────────────────────────────────────────
 # Show all SQL in console during dev
 # ──────────────────────────────────────────────
-LOGGING["loggers"]["django.db.backends"]["level"] = "DEBUG"  # noqa: F405
+# LOGGING["loggers"]["django.db.backends"]["level"] = "DEBUG"  # noqa: F405
