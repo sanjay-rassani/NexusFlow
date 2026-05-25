@@ -317,6 +317,16 @@ class OrderService:
             admin.email,
         )
 
+        # Add rider to the order's chat room so they can communicate
+        # with the customer and vendor. Room is created lazily if absent.
+        try:
+            from apps.chat.services import ChatService
+            room = ChatService.get_or_create_room(order)
+            ChatService.add_participant(room, rider)
+        except Exception as exc:
+            # Chat room failure must never break order assignment
+            logger.warning("Failed to add rider to chat room for order %s: %s", order.id, exc)
+
         OrderService._emit_event("RIDER_ASSIGNED", order)
 
         return order
@@ -374,18 +384,27 @@ class OrderService:
     @staticmethod
     def _emit_event(event_type: str, order: Order) -> None:
         """
-        Broadcasts real-time events to all parties subscribed to an order.
+        Broadcasts real-time events to all parties subscribed to an order
+        AND persists DB notifications so users can retrieve history later.
 
-        Event routing:
-          NEW_ORDER            → vendor's personal notification channel
-                                  (so they see it even before opening the order WS)
-          ORDER_STATUS_UPDATED → order channel group (customer, vendor, rider)
-          RIDER_ASSIGNED       → order channel group + customer notification channel
+        Event routing (WebSocket channels):
+          NEW_ORDER            → vendor personal notification channel + order channel
+          ORDER_STATUS_UPDATED → order channel + customer notification channel
+          RIDER_ASSIGNED       → order channel + customer + rider notification channels
+
+        DB notifications persisted:
+          NEW_ORDER            → vendor
+          ORDER_STATUS_UPDATED → customer (+ rider if assigned)
+          RIDER_ASSIGNED       → customer + rider
 
         All sends are deferred via transaction.on_commit so phantom events
         are never emitted if the DB transaction rolls back.
+        Notification creation failures are caught and logged — they must
+        never break the primary order operation.
         """
-        from core.channel_utils import broadcast, broadcast_to_order, broadcast_to_user
+        from apps.notifications.models import NotificationType
+        from apps.notifications.services import NotificationService
+        from core.channel_utils import broadcast_to_order, broadcast_to_user
 
         order_payload = {
             "type": "ORDER_STATUS_UPDATED",
@@ -395,7 +414,28 @@ class OrderService:
         }
 
         if event_type == "NEW_ORDER":
-            # Push to vendor's notification channel so they receive it immediately
+            # ── Persist DB notification ──────────────────────────────────────
+            try:
+                NotificationService.create(
+                    recipient=order.vendor.owner,
+                    notification_type=NotificationType.NEW_ORDER,
+                    title="New Order Received",
+                    message=(
+                        f"New order from {order.customer.full_name or order.customer.email} "
+                        f"— total {order.total}"
+                    ),
+                    data={"order_id": str(order.id), "status": order.status},
+                )
+            except Exception as exc:
+                logger.error("Failed to persist NEW_ORDER notification for order %s: %s", order.id, exc)
+
+            # ── Async email ──────────────────────────────────────────────────
+            _order_id = str(order.id)
+            transaction.on_commit(
+                lambda: _dispatch_email("notifications.send_new_order_email", order_id=_order_id)
+            )
+
+            # ── Real-time WS events ──────────────────────────────────────────
             broadcast_to_user(
                 order.vendor.owner_id,
                 {
@@ -409,18 +449,57 @@ class OrderService:
                     },
                 },
             )
-            # Also broadcast to the order channel (vendor may already be watching)
             broadcast_to_order(order.id, {
                 "type": "order.status.updated",
                 "data": order_payload,
             })
 
         elif event_type == "ORDER_STATUS_UPDATED":
+            # ── Persist DB notifications ─────────────────────────────────────
+            try:
+                NotificationService.create(
+                    recipient=order.customer,
+                    notification_type=NotificationType.ORDER_STATUS,
+                    title=f"Order {order.status.replace('_', ' ').title()}",
+                    message=f"Your order status has been updated to {order.status}.",
+                    data={"order_id": str(order.id), "status": order.status},
+                )
+                if order.rider:
+                    NotificationService.create(
+                        recipient=order.rider,
+                        notification_type=NotificationType.ORDER_STATUS,
+                        title=f"Order {order.status.replace('_', ' ').title()}",
+                        message=f"Order {order.id} status: {order.status}.",
+                        data={"order_id": str(order.id), "status": order.status},
+                    )
+            except Exception as exc:
+                logger.error("Failed to persist ORDER_STATUS notification for order %s: %s", order.id, exc)
+
+            # ── Async emails ─────────────────────────────────────────────────
+            _order_id = str(order.id)
+            _customer_id = str(order.customer_id)
+            transaction.on_commit(
+                lambda: _dispatch_email(
+                    "notifications.send_order_status_email",
+                    order_id=_order_id,
+                    recipient_id=_customer_id,
+                )
+            )
+            if order.rider_id:
+                _rider_id = str(order.rider_id)
+                transaction.on_commit(
+                    lambda: _dispatch_email(
+                        "notifications.send_order_status_email",
+                        order_id=_order_id,
+                        recipient_id=_rider_id,
+                    )
+                )
+
+            # ── Real-time WS events ──────────────────────────────────────────
             broadcast_to_order(order.id, {
                 "type": "order.status.updated",
                 "data": order_payload,
             })
-            # Push to customer's notification channel as well
             broadcast_to_user(
                 order.customer_id,
                 {
@@ -440,6 +519,37 @@ class OrderService:
                 "rider_id": str(order.rider_id) if order.rider_id else None,
                 "rider_email": order.rider.email if order.rider else None,
             }
+
+            # ── Persist DB notifications ─────────────────────────────────────
+            try:
+                NotificationService.create(
+                    recipient=order.customer,
+                    notification_type=NotificationType.RIDER_ASSIGNED,
+                    title="Rider Assigned to Your Order",
+                    message=(
+                        f"Rider {order.rider.full_name or order.rider.email} "
+                        f"has been assigned to your order."
+                    ),
+                    data=rider_data,
+                )
+                if order.rider:
+                    NotificationService.create(
+                        recipient=order.rider,
+                        notification_type=NotificationType.RIDER_ASSIGNED,
+                        title="New Delivery Assignment",
+                        message=f"You have been assigned to order {order.id}.",
+                        data=rider_data,
+                    )
+            except Exception as exc:
+                logger.error("Failed to persist RIDER_ASSIGNED notification for order %s: %s", order.id, exc)
+
+            # ── Async email ──────────────────────────────────────────────────
+            _order_id = str(order.id)
+            transaction.on_commit(
+                lambda: _dispatch_email("notifications.send_rider_assigned_email", order_id=_order_id)
+            )
+
+            # ── Real-time WS events ──────────────────────────────────────────
             broadcast_to_order(order.id, {
                 "type": "rider.assigned",
                 "data": rider_data,
@@ -453,10 +563,24 @@ class OrderService:
             )
 
         else:
-            # Generic fallback — broadcast to order channel only
+            # Generic fallback — broadcast to order channel only (no DB notification)
             broadcast_to_order(order.id, {
                 "type": "order.status.updated",
                 "data": order_payload,
             })
 
         logger.debug("Event [%s] emitted for order %s.", event_type, order.id)
+
+
+def _dispatch_email(task_name: str, **kwargs) -> None:
+    """
+    Helper that sends a Celery task by name.
+    Failures are caught and logged — email dispatch must never propagate to callers.
+    Using send_task() by name avoids circular imports between services and tasks.
+    """
+    try:
+        from config.celery import app as celery_app
+        celery_app.send_task(task_name, kwargs=kwargs)
+        logger.debug("Email task dispatched: %s %s", task_name, kwargs)
+    except Exception as exc:
+        logger.error("Failed to dispatch email task %s: %s", task_name, exc)

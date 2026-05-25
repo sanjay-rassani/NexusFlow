@@ -87,3 +87,15 @@ def broadcast_to_order(order_id, message: dict) -> None:
 def broadcast_rider_location(rider_id, message: dict) -> None:
     """Send to all subscribers watching a rider's live location."""
     broadcast(group=f"rider_location_{rider_id}", message=message, use_on_commit=False)
+
+
+def broadcast_to_chat_room(room_id, message: dict, use_on_commit: bool = True) -> None:
+    """
+    Send a message to all participants connected to a chat room.
+    Group name format: chat_room_{room_id}
+
+    use_on_commit=True when called inside a DB transaction (send_message).
+    use_on_commit=False for ephemeral events like typing indicators that have
+    no DB write behind them.
+    """
+    broadcast(group=f"chat_room_{room_id}", message=message, use_on_commit=use_on_commit)
